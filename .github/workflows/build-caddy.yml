@@ -73,7 +73,7 @@ jobs:
         run: |
           VERSION="${{ inputs.caddy_version }}"
           [ -z "$VERSION" ] && VERSION="${{ needs.check.outputs.version }}"
-          [ -n "$VERSION" ] && VER="--version $VERSION" || VER=""
+          [ -n "$VERSION" ] && VER="$VERSION" || VER=""
 
           MODULES="${{ env.BASE_MODULES }}"
           if [ -n "${{ inputs.extra_modules }}" ]; then

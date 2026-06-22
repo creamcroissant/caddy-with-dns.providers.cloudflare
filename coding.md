@@ -9,4 +9,4 @@
   - 支持手动触发（可指定 Caddy 版本和额外模块）
   - linux/amd64 + linux/arm64 双架构
   - 自动上传 Artifact，手动触发时创建 GitHub Release
-- **参考**: 博客仅摘取编译命令 `xcaddy build --with github.com/caddy-dns/cloudflare`，部署步骤不纳入
+- **fix**: `if: |` 多行语法 GitHub 不识别，改为 `if: ${{ }}` 单行后通过解析
