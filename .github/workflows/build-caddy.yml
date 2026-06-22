@@ -2,7 +2,7 @@ name: Build Caddy with DNS modules
 
 on:
   schedule:
-    - cron: "37 3 * * *"         # 每天检查一次上游
+    - cron: "37 3 * * *"
   workflow_dispatch:
     inputs:
       caddy_version:
@@ -20,29 +20,24 @@ env:
   BASE_MODULES: "--with github.com/caddy-dns/cloudflare"
 
 jobs:
-  # ============================================================
-  # 检查上游是否有新稳定版
-  # ============================================================
   check:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       skip: ${{ steps.resolve.outputs.skip }}
     steps:
-      - id: resolve
+      - name: 检查上游最新稳定版
+        id: resolve
         run: |
-          # 获取 Caddy 最新稳定版（排除 prerelease / draft）
           LATEST=$(curl -sSf https://api.github.com/repos/caddyserver/caddy/releases \
             | jq -r '[.[] | select(.prerelease==false and .draft==false)] | first.tag_name')
-
           echo "上游最新稳定版: $LATEST"
 
-          # 调度触发时检查是否已构建过此版本
           if [ "${{ github.event_name }}" = "schedule" ]; then
             EXISTING=$(curl -sSf https://api.github.com/repos/${{ github.repository }}/releases \
-              | jq -r --arg v "$LATEST" '[.[] | select(.tag_name | test($v))] | length')
+              | jq -r --arg v "$LATEST" '[.[] | select(.tag_name==($v+"-custom"))] | length')
             if [ "$EXISTING" -gt 0 ]; then
-              echo "已有 $LATEST 对应的 Release，跳过"
+              echo "已有 $LATEST-custom 的 Release，跳过构建"
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -51,14 +46,9 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "version=$LATEST" >> "$GITHUB_OUTPUT"
 
-  # ============================================================
-  # 交叉编译
-  # ============================================================
   build:
     needs: check
-    if: |
-      (needs.check.outputs.skip == 'false') ||
-      (github.event_name == 'workflow_dispatch')
+    if: ${{ needs.check.outputs.skip == 'false' || github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,27 +71,29 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
-          # 版本：手动指定 > 上游最新
           VERSION="${{ inputs.caddy_version }}"
           [ -z "$VERSION" ] && VERSION="${{ needs.check.outputs.version }}"
           [ -n "$VERSION" ] && VER="--version $VERSION" || VER=""
 
           MODULES="${{ env.BASE_MODULES }}"
-          [ -n "${{ inputs.extra_modules }}" ] && \
-            for m in ${{ inputs.extra_modules }}; do MODULES="$MODULES --with $m"; done
+          if [ -n "${{ inputs.extra_modules }}" ]; then
+            for m in ${{ inputs.extra_modules }}; do
+              MODULES="$MODULES --with $m"
+            done
+          fi
 
           echo ">> xcaddy build $VER $MODULES"
           xcaddy build $VER $MODULES
           mv caddy caddy-linux-${{ matrix.goarch }}
 
       - name: 验证（amd64）
-        if: matrix.goarch == 'amd64'
+        if: ${{ matrix.goarch == 'amd64' }}
         run: |
           ./caddy-linux-amd64 list-modules | grep dns
           echo "✅ DNS 模块验证通过"
 
       - name: 验证架构（arm64）
-        if: matrix.goarch == 'arm64'
+        if: ${{ matrix.goarch == 'arm64' }}
         run: file caddy-linux-arm64
 
       - uses: actions/upload-artifact@v4
@@ -110,23 +102,20 @@ jobs:
           path: caddy-linux-${{ matrix.goarch }}
           retention-days: 7
 
-  # ============================================================
-  # 发布 Release
-  # ============================================================
   release:
     needs: [check, build]
-    if: |
-      always() &&
-      needs.build.result == 'success'
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
-    permissions: { contents: write }
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - id: tag
+      - name: 生成 Release Tag
+        id: tag
         run: |
           VERSION="${{ inputs.caddy_version }}"
           [ -z "$VERSION" ] && VERSION="${{ needs.check.outputs.version }}"
@@ -138,7 +127,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Caddy ${{ steps.tag.outputs.version }} (含 DNS 模块)
           body: |
-            Caddy **${{ steps.tag.outputs.version }}** + `github.com/caddy-dns/cloudflare`
+            Caddy ${{ steps.tag.outputs.version }} + github.com/caddy-dns/cloudflare
 
             linux/amd64  ·  linux/arm64
           files: artifacts/**/*
